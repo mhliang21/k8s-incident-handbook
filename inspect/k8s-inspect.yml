@@ -1,0 +1,112 @@
+---
+# =============================================================================
+# k8s-inspect.yml — K8s 集群巡检 Ansible Playbook
+# 用法：ansible-playbook -i inventory.ini k8s-inspect.yml
+# 适用于生产集群：把各节点 IP 填进 inventory，配好 SSH 免密
+# =============================================================================
+
+- name: K8s 集群一键巡检
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    inspect_report_dir: /tmp/k8s-inspect
+    # 磁盘使用率告警阈值（%）
+    disk_warn_threshold: 80
+    # 内存使用率告警阈值（%）
+    mem_warn_threshold: 85
+
+  tasks:
+    # ---------- 基础信息 ----------
+    - name: 收集主机基础信息
+      ansible.builtin.setup:
+        filter: "ansible_*"
+
+    - name: 创建报告目录
+      ansible.builtin.file:
+        path: "{{ inspect_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    # ---------- 系统资源巡检 ----------
+    - name: 检查磁盘使用率
+      ansible.builtin.shell: |
+        df -h --output=source,pcent,target | awk 'NR>1 {print $1, $2, $3}'
+      register: disk_usage
+      changed_when: false
+
+    - name: 检查内存使用率
+      ansible.builtin.shell: |
+        free -m | awk 'NR==2 {printf "%.1f", $3/$2*100}'
+      register: mem_usage
+      changed_when: false
+
+    - name: 检查系统负载
+      ansible.builtin.shell: uptime
+      register: load_avg
+      changed_when: false
+
+    # ---------- 容器运行时检查 ----------
+    - name: 检查 Docker 服务状态
+      ansible.builtin.systemd:
+        name: docker
+      register: docker_status
+
+    - name: 检查容器运行时进程
+      ansible.builtin.shell: |
+        systemctl is-active docker || systemctl is-active containerd
+      register: runtime_status
+      changed_when: false
+
+    # ---------- Kubelet 检查 ----------
+    - name: 检查 kubelet 服务状态
+      ansible.builtin.systemd:
+        name: kubelet
+      register: kubelet_status
+
+    - name: 检查 kubelet 进程存活
+      ansible.builtin.shell: pgrep -f kubelet > /dev/null && echo alive || echo dead
+      register: kubelet_process
+      changed_when: false
+
+    # ---------- 生成报告 ----------
+    - name: 汇总巡检结果到本机报告
+      ansible.builtin.copy:
+        content: |
+          ==== {{ ansible_hostname }} 巡检报告 ====
+          时间: {{ ansible_date_time.iso8601 }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          CPU 核数: {{ ansible_processor_vcpus }}
+          内存: {{ (ansible_memtotal_mb/1024)|round(1) }} GB
+          磁盘使用率:
+          {{ disk_usage.stdout }}
+          内存使用率: {{ mem_usage.stdout }}%
+          负载: {{ load_avg.stdout }}
+          Docker 状态: {{ docker_status.status.ActiveState }}
+          容器运行时: {{ runtime_status.stdout }}
+          Kubelet 状态: {{ kubelet_status.status.ActiveState }}
+          Kubelet 进程: {{ kubelet_process.stdout }}
+        dest: "{{ inspect_report_dir }}/{{ ansible_hostname }}.txt"
+        mode: "0644"
+
+    # ---------- 告警判断 ----------
+    - name: 磁盘告警
+      ansible.builtin.fail:
+        msg: "磁盘使用率超过 {{ disk_warn_threshold }}%"
+      when: >
+        (disk_usage.stdout | regex_findall('[0-9]+%') | map('replace','%','') | map('int') | max) > disk_warn_threshold
+      ignore_errors: yes
+
+    - name: 内存告警
+      ansible.builtin.fail:
+        msg: "内存使用率超过 {{ mem_warn_threshold }}%"
+      when: (mem_usage.stdout | float) > mem_warn_threshold
+      ignore_errors: yes
+
+- name: 汇总所有节点报告
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: 输出报告汇总
+      ansible.builtin.debug:
+        msg: "巡检完成，报告在 /tmp/k8s-inspect/ 目录下"

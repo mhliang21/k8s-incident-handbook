@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-killer
+spec:
+  containers:
+  - name: mem-eater
+    image: python:3.11-alpine
+    command: ["python", "-c", "a = bytearray(200 * 1024 * 1024)"]
+    resources:
+      limits:
+        memory: "50Mi"

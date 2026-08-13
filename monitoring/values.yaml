@@ -1,0 +1,36 @@
+alertmanager:
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        memory: "100Mi"
+      limits:
+        memory: "200Mi"
+
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    retention: 2d
+    resources:
+      requests:
+        memory: "300Mi"
+      limits:
+        memory: "600Mi"
+
+grafana:
+  adminPassword: admin
+  resources:
+    requests:
+      memory: "100Mi"
+    limits:
+      memory: "200Mi"
+
+kube-state-metrics:
+  resources:
+    requests:
+      memory: "50Mi"
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      memory: "50Mi"
